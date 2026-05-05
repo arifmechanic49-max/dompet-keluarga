@@ -537,27 +537,25 @@ async function loadAll(force = false) {
     // Format baris transaksi: [id, date, desc, category, amount, user, monthKey]
     transactions = (txData.data || [])
       .filter(r => r[0] && String(r[0]).trim() !== '')
-      .map(r => ({
-        id:       String(r[0]),
-        date:     toDateStr(r[1]),
-        desc:     String(r[2]),
-        category: String(r[3]),
-        amount:   parseFloat(r[4]) || 0,
-        user:     String(r[5] || ''),
-        monthKey: toMonthKey(r[6]) || toMonthKey(r[1]),
-      }));
+      .map(r => {
+        const dateStr  = toDateStr(r[1]);
+        const mkRaw    = toMonthKey(r[6]);
+        const monthKey = mkRaw || (dateStr ? dateStr.substring(0,7) : '');
+        return { id:String(r[0]), date:dateStr, desc:String(r[2]),
+                 category:String(r[3]), amount:parseFloat(r[4])||0,
+                 user:String(r[5]||''), monthKey };
+      });
 
     // Format baris pemasukan: [id, date, desc, amount, user, monthKey]
     income = (incData.data || [])
       .filter(r => r[0] && String(r[0]).trim() !== '')
-      .map(r => ({
-        id:       String(r[0]),
-        date:     toDateStr(r[1]),
-        desc:     String(r[2]),
-        amount:   parseFloat(r[3]) || 0,
-        user:     String(r[4] || ''),
-        monthKey: toMonthKey(r[5]) || toMonthKey(r[1]),
-      }));
+      .map(r => {
+        const dateStr  = toDateStr(r[1]);
+        const mkRaw    = toMonthKey(r[5]);
+        const monthKey = mkRaw || (dateStr ? dateStr.substring(0,7) : '');
+        return { id:String(r[0]), date:dateStr, desc:String(r[2]),
+                 amount:parseFloat(r[3])||0, user:String(r[4]||''), monthKey };
+      });
 
     const jam = new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
     setSyncStatus('ok', 'Sync ' + jam);
@@ -675,48 +673,56 @@ function mk(y,m) { return `${y}-${String(m+1).padStart(2,'0')}`; }
 function currentMK() { return mk(currentYear, currentMonth); }
 
 // ── DATE HELPERS ─────────────────────────────────────────────
-// Konversi berbagai format tanggal ke YYYY-MM-DD
-function toDateStr(val) {
-  if (!val) return '';
-  const s = String(val);
-  // Sudah format YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  // Format ISO dengan T (dari Sheets/JS Date)
-  if (s.includes('T')) return s.split('T')[0];
-  // Format Date object dari Sheets (misal: "Mon May 04 2026...")
-  try {
-    const d = new Date(s);
-    if (!isNaN(d)) {
-      // Gunakan UTC untuk hindari timezone shift
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth()+1).padStart(2,'0');
-      const dd = String(d.getUTCDate()).padStart(2,'0');
-      return `${y}-${m}-${dd}`;
-    }
-  } catch(e) {}
-  return s;
+// Google Sheets mengembalikan Date sebagai serial number (angka)
+// atau string ISO. Fungsi ini menangani semua kemungkinan format.
+
+function sheetsDateToJS(val) {
+  if (!val) return null;
+  // Jika angka → Sheets serial date (hari sejak 30 Des 1899)
+  if (typeof val === 'number') {
+    const ms = (val - 25569) * 86400 * 1000;
+    return new Date(ms);
+  }
+  const s = String(val).trim();
+  if (!s) return null;
+  // Sudah YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T00:00:00Z');
+  // ISO dengan T
+  if (s.includes('T')) return new Date(s);
+  // Coba parse biasa
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
 }
 
-// Konversi nilai monthKey (bisa ISO atau YYYY-MM) ke format YYYY-MM
+function toDateStr(val) {
+  if (!val) return '';
+  // Sudah string YYYY-MM-DD, langsung return
+  if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val.trim())) return val.trim();
+  const d = sheetsDateToJS(val);
+  if (!d) return String(val);
+  // Pakai local date agar tidak shift timezone
+  const y  = d.getUTCFullYear();
+  const m  = String(d.getUTCMonth()+1).padStart(2,'0');
+  const dd = String(d.getUTCDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
+}
+
 function toMonthKey(val) {
   if (!val) return '';
-  const s = String(val);
-  // Sudah YYYY-MM
+  const s = String(val).trim();
+  // Sudah format YYYY-MM
   if (/^\d{4}-\d{2}$/.test(s)) return s;
-  // Ambil YYYY-MM dari ISO string
-  if (s.includes('T') || s.includes('-')) {
-    const parts = s.split('T')[0].split('-');
-    if (parts.length >= 2) return `${parts[0]}-${parts[1]}`;
+  // Ambil dari YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.substring(0,7);
+  // Dari ISO string
+  if (s.includes('T')) return s.split('T')[0].substring(0,7);
+  // Sheets serial number
+  const d = sheetsDateToJS(val);
+  if (d) {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth()+1).padStart(2,'0');
+    return `${y}-${m}`;
   }
-  // Coba parse sebagai Date
-  try {
-    const d = new Date(s);
-    if (!isNaN(d)) {
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth()+1).padStart(2,'0');
-      return `${y}-${m}`;
-    }
-  } catch(e) {}
   return '';
 }
 
